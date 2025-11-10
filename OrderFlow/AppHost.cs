@@ -1,5 +1,9 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
-builder.AddProject<Projects.OrderFlow_Identity>("orderflow-identity");
+var postgres = builder.AddPostgres("postgres");
+var postgresdb = postgres.AddDatabase("postgresdb");
+
+builder.AddProject<Projects.OrderFlow_Identity>("orderflow-identity")
+    .WithReference(postgresdb);
 
 builder.Build().Run();

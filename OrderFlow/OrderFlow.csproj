@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\OrderFlow.Identity\OrderFlow.Identity.csproj" />
+    <ProjectReference Include="..\OrderFlow.ServiceDefaults\OrderFlow.ServiceDefaults.csproj" />
   </ItemGroup>
 
 </Project>

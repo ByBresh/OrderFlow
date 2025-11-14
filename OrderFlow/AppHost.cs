@@ -1,18 +1,28 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
-// Configure PostgreSQL database
-var postgres = builder.AddPostgres("identity")
-    .WithLifetime(ContainerLifetime.Persistent);
+// ==============================================
+// DATABASE CONFIGURATION - PostgreSQL
+// ==============================================
 
-// Add a database to the PostgreSQL instance
-var identitydb = postgres.AddDatabase("identitydb");
+// PostgreSQL database
+var postgres = builder.AddPostgres("postgres")
+    .WithLifetime(ContainerLifetime.Persistent); // Make database persistent
 
-// Add the OrderFlow services
+// Identity database
+var identityDb = postgres.AddDatabase("identity-db");
+
+// ==============================================
+// MICROSERVICES
+// ==============================================
+
+// Identity API
 var identityApi = builder.AddProject<Projects.OrderFlow_Identity>("orderflow-identity")
-    .WaitFor(postgres)
-    .WithReference(identitydb);
+    .WithReference(identityDb)
+    .WaitFor(identityDb); // Ensure the database is ready before starting the service
 
-// Add the React frontend
+// ==============================================
+// FRONTEND APPLICATION - React
+// ==============================================
 var frontend = builder.AddNpmApp("orderflow-front", "../orderflow.front")
     .WithReference(identityApi)
     .WithHttpEndpoint(env: "PORT")

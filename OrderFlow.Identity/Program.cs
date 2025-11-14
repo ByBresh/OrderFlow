@@ -1,37 +1,165 @@
+using Scalar.AspNetCore;
+using OrderFlow.Identity.Data;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
-using OrderFlow.Identity.Data;
-
+using OrderFlow.Identity.Features.Auth.V1;
+using FluentValidation;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using Asp.Versioning;
+using Microsoft.OpenApi.Models;
+using OrderFlow.Identity.Extensions;
 var builder = WebApplication.CreateBuilder(args);
 
+// Add Aspire Service Defaults (OpenTelemetry, Health Checks, Service Discovery, Resilience)
 builder.AddServiceDefaults();
 
-builder.Services.AddSwaggerGen();
+// Configure OpenAPI documents for different versions with JWT Bearer authentication
+builder.Services.AddOpenApi("v1", options =>
+{
+    options.ConfigureDocumentInfo(
+        "OrderFlow Identity API V1",
+        "v1",
+        "Authentication API using Minimal APIs with JWT Bearer authentication");
+    options.AddJwtBearerSecurity();
+});
 
-// Add services to the container.
+builder.Services.AddOpenApi("v2", options =>
+{
+    options.ConfigureDocumentInfo(
+        "OrderFlow Identity API V2",
+        "v2",
+        "Authentication API using Controllers with JWT Bearer authentication");
+    options.AddJwtBearerSecurity();
+});
+
+builder.Services.AddAuthorization();
 builder.Services.AddControllers();
 
-// Add DbContext using PostgreSQL provider
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("identity-db")));
+// Add API versioning
+builder.Services.AddApiVersioning(options =>
+{
+    options.DefaultApiVersion = new Asp.Versioning.ApiVersion(1, 0);
+    options.AssumeDefaultVersionWhenUnspecified = true;
+    options.ReportApiVersions = true;
+    options.ApiVersionReader = new UrlSegmentApiVersionReader();
+})
+.AddApiExplorer(options =>
+{
+    options.GroupNameFormat = "'v'VVV";
+    options.SubstituteApiVersionInUrl = true;
+});
 
-builder.Services.AddIdentity<ApplicationUser, IdentityRole>()
-    .AddEntityFrameworkStores<ApplicationDbContext>();
+builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 
+// ============================================
+// CORS CONFIGURATION
+// ============================================
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        policy.AllowAnyOrigin()
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
+
+
+// Add PosgreSQL DbContext with Aspire
+builder.AddNpgsqlDbContext<ApplicationDbContext>("identity-db");
+
+// Add ASP.NET Core Identity
+builder.Services.AddIdentity<IdentityUser, IdentityRole>(options =>
+{
+    // Password settings
+    options.Password.RequireDigit = true;
+    options.Password.RequireLowercase = true;
+    options.Password.RequireUppercase = true;
+    options.Password.RequireNonAlphanumeric = true;
+    options.Password.RequiredLength = 8;
+
+    // Lockout settings
+    options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(5);
+    options.Lockout.MaxFailedAccessAttempts = 5;
+    options.Lockout.AllowedForNewUsers = true;
+
+    // User settings
+    options.User.RequireUniqueEmail = true;
+
+    // Sign in settings
+    options.SignIn.RequireConfirmedEmail = false; // Set to true in production
+})
+.AddEntityFrameworkStores<ApplicationDbContext>()
+.AddDefaultTokenProviders();
+
+// ============================================
+// JWT BEARER AUTHENTICATION
+// ============================================
+builder.Services.AddJwtAuthentication(builder.Configuration);
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// ============================================
+// AUTO-MIGRATE DATABASE ON STARTUP
+// ============================================
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
+    using var scope = app.Services.CreateScope();
+    var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    await context.Database.MigrateAsync();
+
+    var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
+
+    foreach (var role in Roles.GetAll())
+    {
+        if (!await roleManager.RoleExistsAsync(role))
+        {
+            await roleManager.CreateAsync(new IdentityRole(role));
+        }
+    }
+
+    // Map OpenAPI documents - uses document names from AddOpenApi configuration
+    app.MapOpenApi();
+
+    // path: scalar
+    app.MapScalarApiReference(options =>
+    {
+        options
+            .WithTitle("OrderFlow Identity API")
+            .AddDocument("v1", "V1 - Minimal API", "/openapi/v1.json", isDefault: true)
+            .AddDocument("v2", "V2 - Controllers", "/openapi/v2.json");
+    });
+
+    //path: swagger
+
+    app.UseSwaggerUI(options =>
+    {
+
+        options.SwaggerEndpoint("/openapi/v1.json", "OrderFlow Identity API V1");
+        options.SwaggerEndpoint("/openapi/v2.json", "OrderFlow Identity API V2");
+    });
+
 }
+
 
 app.UseHttpsRedirection();
 
-app.UseAuthorization();
+app.UseCors(); // Must be before Authentication and Authorization
 
+app.UseAuthorization();
+app.UseAuthentication();
+
+app.MapDefaultEndpoints(); // Add health check endpoints
+
+// Map Controllers (V2)
 app.MapControllers();
 
-app.Run();
+// Map Minimal API endpoints (V1)
+app.MapRegisterUser();
+app.MapLoginUser();
+app.MapGetCurrentUser();
+app.MapAdminOnly();
+
+await app.RunAsync();
